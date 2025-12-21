@@ -4,6 +4,9 @@
 #include <string.h>
 #include <ctype.h>
 
+#define MAX_HEADER_NAME 128
+#define MAX_HEADER_VALUE 1024
+
 
 /* RFC 9110 tchar lookup table
  *
@@ -70,12 +73,43 @@ static const unsigned char is_forbidden_target_char[256] = {
     [128 ... 255] = 1
 };
 
+static const unsigned char is_valid_value_char[256] = {
+    [0 ... 8] = 0,
+    [9] = 1,     // HTAB
+    [10 ... 31] = 0,
+    [32 ... 126] = 1,
+    [127 ... 255] = 0
+};
+
 enum req_line_status {
     ACCEPTED,
     MAL_METHOD,
     MAL_PATH, 
     MAL_VERSION
 };
+
+
+
+static char* trim_copy(const char *str, size_t len, size_t *out_len) {
+    if (!str || !out_len) return NULL;
+
+    const char *start = str;
+    const char *end = str + len - 1;
+
+    while (start <= end && isspace((unsigned char)*start)) start++;
+
+    while (end >= start && isspace((unsigned char)*end)) end--;
+
+    *out_len = (size_t)(end - start + 1);
+
+    char *trimmed = malloc(*out_len + 1); 
+    if (!trimmed) return NULL;
+
+    memcpy(trimmed, start, *out_len);
+    trimmed[*out_len] = '\0';
+
+    return trimmed;
+}
 
 
 enum req_line_status parse_req_line(const char *line, Request_line *req_line) {
@@ -156,7 +190,7 @@ enum req_line_status parse_req_line(const char *line, Request_line *req_line) {
             return MAL_PATH;
         }
         goto jump_version;
-    } else if(req_line->path[0] != '/' || req_line->path[1] == '/'){
+    } else if(req_line->path[0] != '/' || (req_line->path[0] == '/' && req_line->path[1] == '/')){
         return MAL_PATH;
     } 
 
@@ -215,117 +249,151 @@ jump_version:
 }
   
 
-void parse_req_headers(){
+void parse_req_headers(Headers_info *headers_info, Headers *headers, int count) {
+    for (int i = 0; i < count; i++) {
     
+        size_t trimmed_len = headers_info[i].length;
+        char *trimmed_line = trim_copy(headers_info[i].start, trimmed_len, &trimmed_len);
+        
+        if (!trimmed_line) {
+            for (int k = 0; k < i; k++) {
+                free(headers[k].field_name);
+                free(headers[k].value);
+            }
+            return;
+        }
+
+        char *p = trimmed_line;
+        char *end = trimmed_line + trimmed_len;
+
+
+        headers[i].field_name = malloc(MAX_HEADER_NAME);
+        headers[i].value = malloc(MAX_HEADER_VALUE);
+        if (!headers[i].field_name || !headers[i].value) {
+            free(trimmed_line);
+            for (int k = 0; k <= i; k++) {
+                free(headers[k].field_name);
+                free(headers[k].value);
+            }
+            return;
+        }
+
+        int j = 0;
+
+        // Parse field name
+        while (p < end && *p != ':') {
+            if (!is_tchar[(unsigned char)*p]) { fprintf(stderr, "Malformed header name\n"); return; }
+            if (j >= MAX_HEADER_NAME - 1) { fprintf(stderr, "Header name too long\n"); return; }
+            headers[i].field_name[j++] = *p++;
+        }
+        headers[i].field_name[j] = '\0';
+
+        // Skip colon
+        if (p < end && *p == ':') p++;
+
+        // Skip optional whitespace (OWS)
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+
+        // Parse value
+        j = 0;
+        while (p < end) {
+            if (!is_valid_value_char[(unsigned char)*p]) { fprintf(stderr, "Malformed header value\n"); return; }
+            if (j >= MAX_HEADER_VALUE - 1) { fprintf(stderr, "Header value too long\n"); return; }
+            headers[i].value[j++] = *p++;
+        }
+        headers[i].value[j] = '\0';
+        free(trimmed_line);
+    }
+
 }
 
-
-void parse_req(const char *raw_req, Request *req){
-    
-    char *p =  (char *)raw_req;
-    size_t len  = strlen(raw_req);
+void parse_req(const char *raw_req, Request *req) {
+    char *p = (char*)raw_req;
+    size_t len = strlen(raw_req);
     char *end_p = p + len;
     char line[512];
     size_t i = 0;
-    
-
 
     if (*p == '\r' || *p == '\n') return;
 
-    //request line
-    while (p != end_p){
-        if (*p =='\r'){
-            if (p + 1 < end_p &&*(p+1) != '\n'){
-                return; //malformed
-            }
+    // Request line
+    while (p != end_p) {
+        if (*p == '\r') {
+            if (p + 1 < end_p && *(p+1) != '\n') return;
             break;
         }
-    
-        if (i >= sizeof(line) - 1){
-            return; //overflow
-        }
+        if (i >= sizeof(line) - 1) return;
         line[i++] = *p++;
-    
     }
-    
-    if (p + 2 >= end_p) return; //overflow
-    
-    line[i] = '\0';
-    
-    p += 2;
-    i = 0;
 
-    // headers
+    if (p + 2 >= end_p) return;
+    line[i] = '\0';
+    p += 2;
+
+    // Count headers
     int count = 0;
     char *header_start = p;
-    while (p != end_p){
-
-        if (*p == '\r') {
-            if (p + 1 < end_p && *(p+1) == '\n'){
-                
-                count++; 
-                
-                if (p + 2 < end_p && *(p+2) == '\r' && p + 3 < end_p && *(p+3) == '\n'){
-                    p += 4;
-                    break;
-                }
-                p += 2;
-                continue;
-        
-            } else{
-                return; //malformed
+    while (p != end_p) {
+        if (*p == '\r' && p + 1 < end_p && *(p+1) == '\n') {
+            count++;
+            if (p + 2 < end_p && *(p+2) == '\r' && p + 3 < end_p && *(p+3) == '\n') {
+                p += 4;
+                break;
             }
-
+            p += 2;
+            continue;
         }
         p++;
     }
-    
 
-    Headers *headers = (Headers*)calloc(count, sizeof(Headers));
-    if (!headers) return;
-    
-    fprintf(stderr, "num of header: %u\n", count);
+    // Collect header info
+    Headers_info *headers_info = calloc(count, sizeof(Headers_info));
+    if (!headers_info) return;
 
     p = header_start;
     int char_cnt = 0;
-    while (p != end_p){
-
+    i = 0;
+    while (p != end_p && i < (long unsigned int)count) {
         if (*p == '\r') {
-            headers[i].length = char_cnt;
+            headers_info[i].length = char_cnt;
             char_cnt = 0;
-            
-            if (p + 1 < end_p && *(p+1) == '\n'){
-                
-                if (p + 2 < end_p && *(p+2) == '\r' && p + 3 < end_p && *(p+3) == '\n'){
+            if (p + 1 < end_p && *(p+1) == '\n') {
+                if (p + 2 < end_p && *(p+2) == '\r' && p + 3 < end_p && *(p+3) == '\n') {
                     p += 4;
                     break;
                 }
                 p += 2;
+                i++;
                 continue;
-        
-            } else{
-                return; //malformed
+            } else {
+                free(headers_info);
+                return; // malformed
             }
-
-            i++;
-
         }
-        
-        if (char_cnt == 0){
-            headers[i].start = p;
-        }
-        
+        if (char_cnt == 0) headers_info[i].start = p;
         char_cnt++;
         p++;
     }
 
-    free(headers);
+    // Allocate headers in request
+    req->headers = (Headers *)calloc(count, sizeof(Headers));
+    parse_req_headers(headers_info, req->headers, count);
 
-    
-    enum req_line_status result = parse_req_line(line, &req->request_line);
-    if (result == MAL_VERSION){ 
-        fprintf(stderr, "malformed version"); 
+    free(headers_info);
+
+    req->header_number = count;
+    // Temporary
+    for (size_t k = 0; k < (long unsigned int)count; k++){
+        free(req->headers[k].field_name);
+        free(req->headers[k].value);
     }
+    free(req->headers);
 
+    // Parse request line
+    enum req_line_status result = parse_req_line(line, &req->request_line);
+    if (result != ACCEPTED) {
+        // malformed request line
+        return;
+    }
 }
 

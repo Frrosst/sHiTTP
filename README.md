@@ -16,4 +16,4 @@ The codebase is currently a bit messy and contains prototyping work, which will 
 - [ ] Add concurrency to handle multiple requests simultaneously  
 - [ ] Support persistent connections (`Keep-Alive`)  
 - [ ] Add HTTP/1.0 support  
-- [ ] Enforce stricter security and semantic rules  
+- [ ] Enforce stricter security and semantic rules  (also fix the memory leaks)
