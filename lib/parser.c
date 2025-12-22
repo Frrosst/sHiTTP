@@ -307,6 +307,11 @@ void parse_req_headers(Headers_info *headers_info, Headers *headers, int count) 
 
 }
 
+void parse_req_body(){
+
+}
+
+
 void parse_req(const char *raw_req, Request *req) {
     char *p = (char*)raw_req;
     size_t len = strlen(raw_req);
@@ -346,35 +351,50 @@ void parse_req(const char *raw_req, Request *req) {
         p++;
     }
 
-    // Collect header info
-    Headers_info *headers_info = calloc(count, sizeof(Headers_info));
-    if (!headers_info) return;
+// Collect header info
+Headers_info *headers_info = calloc(count, sizeof(Headers_info));
+if (!headers_info) return;
 
-    p = header_start;
-    int char_cnt = 0;
-    i = 0;
-    while (p != end_p && i < (long unsigned int)count) {
-        if (*p == '\r') {
-            headers_info[i].length = char_cnt;
-            char_cnt = 0;
-            if (p + 1 < end_p && *(p+1) == '\n') {
-                if (p + 2 < end_p && *(p+2) == '\r' && p + 3 < end_p && *(p+3) == '\n') {
-                    p += 4;
-                    break;
-                }
-                p += 2;
-                i++;
-                continue;
-            } else {
-                free(headers_info);
-                return; // malformed
-            }
+p = header_start;
+int char_cnt = 0;
+i = 0;
+
+while (p < end_p && i < (size_t)count) {
+
+    if (*p == '\r') {
+        // Must have LF
+        if (p + 1 >= end_p || *(p + 1) != '\n') {
+            free(headers_info);
+            return; // malformed
         }
-        if (char_cnt == 0) headers_info[i].start = p;
-        char_cnt++;
-        p++;
+
+        headers_info[i].length = char_cnt;
+        char_cnt = 0;
+
+        // End of headers: CRLF CRLF
+        if (p + 3 < end_p &&
+            *(p + 2) == '\r' &&
+            *(p + 3) == '\n') {
+
+            p += 4;
+            i++;        // count the last header
+            break;
+        }
+
+        // Normal header line end
+        p += 2;
+        i++;
+        continue;
     }
 
+    if (char_cnt == 0)
+        headers_info[i].start = p;
+
+    char_cnt++;
+    p++;
+}
+
+    
     // Allocate headers in request
     req->headers = (Headers *)calloc(count, sizeof(Headers));
     parse_req_headers(headers_info, req->headers, count);
@@ -382,6 +402,49 @@ void parse_req(const char *raw_req, Request *req) {
     free(headers_info);
 
     req->header_number = count;
+
+// Check body
+    size_t body_size = 0;
+
+    for (size_t k = 0; k < (size_t)count; k++) {
+        // Temporary check
+        if (!strcmp(req->headers[k].field_name, "Content-Length")) {
+
+            char *endptr = NULL;
+            body_size = strtoul(req->headers[k].value, &endptr, 10);
+
+        
+            if (*req->headers[k].value == '\0' || *endptr != '\0') {
+                return; // malformed
+            }
+
+            break;
+        }
+    }
+
+    if (body_size > 0) {
+
+    
+        if ((size_t)(end_p - p) < body_size) {
+            return; // incomplete body
+        }
+
+        req->body = malloc(body_size);
+        if (!req->body) {
+            return;
+        }
+
+        for (size_t i = 0; i < body_size; i++) {
+            req->body[i] = *p++;
+        }
+        req->body[i] = '\0';
+
+        fprintf(stderr, "\n%s\n", req->body);
+    //req->body_length = body_size;
+}
+
+    
+
     // Temporary
     for (size_t k = 0; k < (long unsigned int)count; k++){
         free(req->headers[k].field_name);
@@ -395,5 +458,7 @@ void parse_req(const char *raw_req, Request *req) {
         // malformed request line
         return;
     }
-}
 
+
+    
+}

@@ -10,7 +10,6 @@ typedef struct {
     char version[16];
 } Request_line;
 
-
 typedef struct {
     char *field_name;
     char *value;
@@ -25,7 +24,9 @@ typedef struct {
     Request_line request_line;
     Headers *headers;
     int header_number;
+    char *body;
 } Request;
+
 
 // Function declarations
 void parse_req(const char *raw_req, Request *req);
