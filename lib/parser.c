@@ -288,6 +288,12 @@ void parse_req_headers(Headers_info *headers_info, Headers *headers, int count) 
         }
         headers[i].field_name[j] = '\0';
 
+        if (headers[i].field_name[0] == '\0') {
+            fprintf(stderr, "Empty header name\n");
+            return;
+        }
+
+
         // Skip colon
         if (p < end && *p == ':') p++;
 
@@ -304,10 +310,6 @@ void parse_req_headers(Headers_info *headers_info, Headers *headers, int count) 
         headers[i].value[j] = '\0';
         free(trimmed_line);
     }
-
-}
-
-void parse_req_body(){
 
 }
 
@@ -377,7 +379,7 @@ while (p < end_p && i < (size_t)count) {
             *(p + 3) == '\n') {
 
             p += 4;
-            i++;        // count the last header
+            i++;
             break;
         }
 
@@ -404,44 +406,31 @@ while (p < end_p && i < (size_t)count) {
     req->header_number = count;
 
 // Check body
-    size_t body_size = 0;
 
     for (size_t k = 0; k < (size_t)count; k++) {
         // Temporary check
         if (!strcmp(req->headers[k].field_name, "Content-Length")) {
+            
+            char *endptr;
+            req->body_length = strtoul(req->headers[k].value, &endptr, 10);
 
-            char *endptr = NULL;
-            body_size = strtoul(req->headers[k].value, &endptr, 10);
+            req->body = malloc(req->body_length);
+            if (!req->body) return;
 
-        
-            if (*req->headers[k].value == '\0' || *endptr != '\0') {
-                return; // malformed
+            memcpy(req->body, p, req->body_length);
+            p += req->body_length;
+            fprintf(stderr, "DEBUG: body_size = %zu\n", req->body_length);
+
+        for (size_t i = 0; i < req->body_length; i++) {
+            printf("%02X ", req->body[i]);
+            if ((i + 1) % 16 == 0)
+                printf("\n");
             }
+        printf("\n");
 
             break;
         }
     }
-
-    if (body_size > 0) {
-
-    
-        if ((size_t)(end_p - p) < body_size) {
-            return; // incomplete body
-        }
-
-        req->body = malloc(body_size);
-        if (!req->body) {
-            return;
-        }
-
-        for (size_t i = 0; i < body_size; i++) {
-            req->body[i] = *p++;
-        }
-        req->body[i] = '\0';
-
-        fprintf(stderr, "\n%s\n", req->body);
-    //req->body_length = body_size;
-}
 
     
 

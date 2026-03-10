@@ -24,7 +24,8 @@ typedef struct {
     Request_line request_line;
     Headers *headers;
     int header_number;
-    char *body;
+    unsigned char *body;
+    size_t body_length;
 } Request;
 
 
